@@ -1,0 +1,86 @@
+# Processing 16S rRNA Sequences with QIIME2 and DADA2 (Source:John Quensen)
+[Link](https://john-quensen.com/tutorials/merging-dada2-results-in-qiime2/)
+QIIME2 is readily installed using a conda environment. See my tutorial for how to create virtual environments and the QIIME2 page for how to install the latest QIIME2 version in its own envirionment.
+When using QIIME2, the first step is to import the sequence data using a manifest file. This is a tab-delimited file beginning with a header followed by lines for each sample. The header must be exactly as in the example below. The subsequent lines include the sample name in column 1, the full path to the forward read in column 2, and the full path to the corresponding reverse read in column 3.  I create the manifest file by first listing the forward reads to a text file, opening that file in Excel, and then adding the rest of the information by copying, pasting, and replacing as required.  In this example I have named the manifest file manifest_file.tsv. The line endings must be compatible with the computer running QIIME2. If necessary, they can be changed with Notepad++.
+
+Example manifest file:
+
+sample-id forward-absolute-filepath reverse-absolute-filepath
+EG10D100R2 /mnt/home/plate_1/EG10D100R2_16S_R1.fastq /mnt/home/plate_1/EG10D100R2_16S_R2.fastq
+EG10D100R3 /mnt/home/plate_1/EG10D100R3_16S_R1.fastq /mnt/home/plate_1/EG10D100R3_16S_R2.fastq
+EG10D25R1 /mnt/home/plate_1/EG10D25R1_16S_R1.fastq /mnt/home/plate_1/EG10D25R1_16S_R2.fastq
+The QIIME2 command for importing the files is:
+
+qiime tools import \
+--type 'SampleData[PairedEndSequencesWithQuality]' \
+--input-path manifest_file.tsv \
+--output-path paired-end-demux.qza \
+--input-format PairedEndFastqManifestPhred33V2
+All of the sequence data is stored compressed in the file paired-end-demux.qza. If you wish, you may create a visualization file from it with the following command:
+
+qiime demux summarize \
+--i-data paired-end-demux.qza \
+--o-visualization demux.qzv
+To view the contents of demux.qzv, open https://view.qiime2.org/ in your browser and drag demux.qzv into the box at the top of the page. You can then view the number of sequences per sample file and an interactive quality plot which may be of aid in deciding the truncation length parameters for the next step.
+
+The next step is to run the DADA2 plug-in. It takes paired-end-demux.qza as input and requires two parameters, trunc-len-f and trunc-len-r. The idea is to optimize merging of the forward and reverse reads by removing as much of the lower quality portions of the reads as possible and still leave enough overlap. Doing this by inspection of the quality plots is subjective, and so I use Zymo Research’s program FIGARO to find the parameters for me. See my tutorial on FIGARO for how to install and run Figaro.
+
+qiime dada2 denoise-paired \
+--i-demultiplexed-seqs paired-end-demux.qza \
+--p-trunc-len-f 187 \
+--p-trunc-len-r 105 \
+--o-table table.qza \
+--o-representative-sequences rep-seqs.qza \
+--o-denoising-stats denoising-stats.qza
+The output of the DADA2 plug-in includes the ASV table, the representative sequences, and some statistics on the procedure, all in compressed format.
+
+The next step is to align the representative sequences and construct a phylogenetic tree from the alignment. This is accomplished with the following command:
+
+qiime phylogeny align-to-tree-mafft-fasttree \
+--i-sequences rep-seqs.qza \
+--o-alignment aligned-rep-seqs.qza \
+--o-masked-alignment masked-aligned-rep-seqs.qza \
+--o-tree unrooted-tree.qza \
+--o-rooted-tree rooted-tree.qza
+QIIME 2 includes commands for analyzing the results, but I prefer to do my analyses in R, and to keep all of my experimental data together in an experiment level phyloseq object. The following script exports the ASV table, representative sequences, and tree file to the sub-directory phyloseq in formats that are easily read into R.
+
+# Export OTU table
+mkdir phyloseq
+qiime tools export \
+--input-path table.qza \
+--output-path phyloseq
+
+# Convert biom format to tsv format
+biom convert \
+-i phyloseq/feature-table.biom \
+-o phyloseq/otu_table.tsv \
+--to-tsv
+cd phyloseq
+sed -i '1d' otu_table.tsv
+sed -i 's/#OTU ID//' otu_table.tsv
+cd ../
+
+# Export representative sequences
+qiime tools export \
+--input-path rep-seqs.qza \
+--output-path phyloseq
+
+# Export tree files
+qiime tools export \
+--input-path unrooted-tree.qza \
+--output-path phyloseq
+cd phyloseq
+mv tree.nwk unrooted_tree.nwk
+cd ../
+
+qiime tools export \
+--input-path rooted-tree.qza \
+--output-path phyloseq
+cd phyloseq
+mv tree.nwk rooted_tree.nwk
+I classify the representative sequences with the RDP classifier using the following command. If you choose this method, you will likely have to edit the path to RDPTools according to your own installation.
+
+java -Xmx4g -jar /mnt/research/rdp/public/RDPTools/classifier.jar classify -c 0.5 -f fixrank -g 16srrna -o classification_table.tsv dna-sequences.fasta
+[Link for how to import these files into R and phyloseq](http://john-quensen.com/r/import-dada2-asv-tables-into-phyloseq/)
+
+
